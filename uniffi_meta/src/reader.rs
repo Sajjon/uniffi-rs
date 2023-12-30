@@ -244,10 +244,12 @@ impl<'a> MetadataReader<'a> {
             .filter(|t| {
                 matches!(
                     t,
-                    Type::Object { name, imp: ObjectImpl::Struct, .. } if name == &self_name
+                    Type::Object { name, imp: ObjectImpl::Struct, .. } |
+                    Type::Record { name, .. }
+                    if name == &self_name
                 )
             })
-            .context("Constructor return type must be Arc<Self>")?;
+            .context("Constructor return type must be Arc<Self> or Self if used with #[derive(uniffi::Record)]")?;
 
         Ok(ConstructorMetadata {
             module_path,
