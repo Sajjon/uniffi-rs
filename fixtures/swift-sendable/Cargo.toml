@@ -1,0 +1,20 @@
+[package]
+name = "swift-sendable"
+edition = "2021"
+authors = ["Alexander Cyon <alex.cyon@gmail.com>"]
+version = "0.22.0"
+license = "MPL-2.0"
+publish = false
+
+[lib]
+crate-type = ["lib", "cdylib"]
+name = "swift_sendable"
+
+[dependencies]
+uniffi = { workspace = true }
+
+[build-dependencies]
+uniffi = { workspace = true, features = ["build"] }
+
+[dev-dependencies]
+uniffi = { workspace = true, features = ["bindgen-tests"] }
