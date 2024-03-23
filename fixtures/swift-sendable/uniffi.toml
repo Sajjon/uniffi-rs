@@ -1,0 +1,2 @@
+[bindings.swift]
+sendable_value_types = true

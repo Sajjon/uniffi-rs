@@ -62,6 +62,7 @@ members = [
   "fixtures/simple-iface",
   "fixtures/struct-default-values",
   "fixtures/swift-omit-labels",
+  "fixtures/swift-sendable",
   "fixtures/futures",
   "fixtures/swift-bridging-header-compile",
   "fixtures/type-limits",
