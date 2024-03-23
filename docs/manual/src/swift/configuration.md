@@ -13,6 +13,7 @@ The generated Swift module can be configured using a `uniffi.toml` configuration
 | `generate_module_map` | `true` | Whether to generate a `.modulemap` file for the lower-level C module with FFI declarations. |
 | `omit_argument_labels` | `false` | Whether to omit argument labels in Swift function definitions. |
 | `generate_immutable_records` | `false` | Whether to generate records with immutable fields (`let` instead of `var`). |
+| `sendable_value_types` | `false` | Whether to mark value types as 'Sendable'. |
 | `custom_types`      | | A map which controls how custom types are exposed to Swift. See the [custom types section of the manual](../udl/custom_types.md#custom-types-in-the-bindings-code)|
 
 
