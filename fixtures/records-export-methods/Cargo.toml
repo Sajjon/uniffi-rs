@@ -1,0 +1,20 @@
+[package]
+name = "uniffi-fixture-records-export-methods"
+version = "0.22.0"
+authors = ["Alexander Cyon <alex.cyon@gmail.com>"]
+edition = "2021"
+license = "MPL-2.0"
+publish = false
+
+[lib]
+crate-type = ["lib", "cdylib"]
+name = "uniffi_fixture_records_export_methods"
+
+[dependencies]
+uniffi = { workspace = true }
+
+[build-dependencies]
+uniffi = { workspace = true, features = ["build"] }
+
+[dev-dependencies]
+uniffi = { workspace = true, features = ["bindgen-tests"] }
