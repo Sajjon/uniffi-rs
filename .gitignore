@@ -4,6 +4,7 @@ target
 .vscode
 .idea
 xcuserdata
+.envrc
 docs/manual/src/internals/api
 # The old mdbook outdir
 docs/manual/book
