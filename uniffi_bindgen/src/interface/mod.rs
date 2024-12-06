@@ -657,12 +657,43 @@ impl ComponentInterface {
     /// The set of FFI functions is derived automatically from the set of higher-level types
     /// along with the builtin FFI helper functions.
     pub fn iter_ffi_function_definitions(&self) -> impl Iterator<Item = FfiFunction> + '_ {
-        self.iter_user_ffi_function_definitions()
+        self.iter_ffi_function_definitions_conditionally_include_checksums(true)
+    }
+
+    pub fn iter_ffi_function_definitions_conditionally_include_checksums(
+        &self,
+        include_checksums: bool,
+    ) -> impl Iterator<Item = FfiFunction> + '_ {
+        let chain = self
+            .iter_user_ffi_function_definitions()
             .cloned()
             .chain(self.iter_rust_buffer_ffi_function_definitions())
             .chain(self.iter_futures_ffi_function_definitions())
-            .chain(self.iter_checksum_ffi_functions())
-            .chain([self.ffi_uniffi_contract_version()])
+            .chain([self.ffi_uniffi_contract_version()]);
+
+        // This is ofc terrible Rust code, but I lack the Rust skills to
+        // "conditionally call chain"
+        // Without the (costly) roundtrip through `collect_vec` below I'm
+        // hit with this compiler error:
+        // `if` and `else` have incompatible types
+        //     expected struct `std::iter::Chain<std::iter::Chain<std::iter::Chain<Cloned<_>, impl Iterator<Item = FfiFunction>>, impl Iterator<Item =
+        // FfiFunction> + '_>, std::array::IntoIter<FfiFunction, 1>>`
+        //    found struct `Chain<Chain<Chain<Chain<Cloned<impl Iterator<Item = &FfiFunction>>, ...>, ...>, ...>, ...>`
+        if !include_checksums {
+            chain.collect::<Vec<FfiFunction>>().into_iter()
+        } else {
+            chain
+                .chain(self.iter_checksum_ffi_functions())
+                .collect::<Vec<FfiFunction>>()
+                .into_iter()
+        }
+
+        // We WANT this, but cant get it to work
+        // if !include_checksums {
+        //     chain
+        // } else {
+        //     chain.chain(self.iter_checksum_ffi_functions())
+        // }
     }
 
     /// Alternate version of iter_ffi_function_definitions for languages that don't support async
