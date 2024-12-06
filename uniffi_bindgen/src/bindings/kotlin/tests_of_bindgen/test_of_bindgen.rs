@@ -1,11 +1,4 @@
-use crate::{
-    bindings::KotlinBindingGenerator, interface, BindingGenerator, Component, ComponentInterface,
-    GenerationSettings,
-};
-
-use super::gen_kotlin;
-use camino::Utf8PathBuf;
-use gen_kotlin::{generate_bindings, Config};
+use super::*;
 
 fn config() -> Config {
     let config = Config::default();
@@ -16,7 +9,7 @@ fn config() -> Config {
 #[test]
 fn test_kotlin_bindgen() {
     let config = config();
-    let ci = ComponentInterface::new("Foobar");
+    let ci = ComponentInterface::new("foobar");
     let bindgen = KotlinBindingGenerator;
 
     let settings = GenerationSettings {
@@ -36,9 +29,8 @@ fn test_kotlin_bindgen() {
 
     let component = components.iter().next().unwrap();
 
-    let kotlin = generate_bindings(&config, &component.ci).unwrap();
-    let expected = r#"
-    package uniffi.Foobar
-    "#;
-    assert_eq!(kotlin, expected)
+    let kotlin = generate_bindings(&component.config, &component.ci).unwrap();
+    // println!("🔮🔮🔮🔮🔮\n{}\n🔮🔮🔮🔮🔮", kotlin);
+    let expected = include_str!("fixture_kotlin.kt");
+    pretty_assertions::assert_eq!(kotlin, expected)
 }

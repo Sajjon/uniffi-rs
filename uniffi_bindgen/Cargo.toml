@@ -35,3 +35,4 @@ uniffi_udl = { path = "../uniffi_udl", version = "=0.28.3" }
 # Don't include the `unicode-linebreak` or `unicode-width` since that functionality isn't needed for
 # docstrings.
 textwrap = { version = "0.16", features=["smawk"], default-features = false }
+pretty_assertions = "1.4.1"
