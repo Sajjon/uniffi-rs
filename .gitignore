@@ -10,3 +10,4 @@ docs/manual/book
 
 examples/app/ios/Generated
 examples/app/ios/IOSApp.xcodeproj/project.xcworkspace/xcshareddata/
+.envrc

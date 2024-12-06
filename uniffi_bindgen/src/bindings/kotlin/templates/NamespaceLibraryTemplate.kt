@@ -56,19 +56,18 @@ internal open class {{ ffi_struct.name()|ffi_struct_name }}(
 {%- endfor %}
 
 
-
-{ macro decl_kotlin_funs func_list}
+{%- macro decl_kotlin_funs(func_list) -%}
 {% for func in func_list -%}
 fun {{ func.name() }}(
     {%- call kt::arg_list_ffi_decl(func) %}
 ): {% match func.return_type() %}{% when Some with (return_type) %}{{ return_type.borrow()|ffi_type_name_by_value }}{% when None %}Unit{% endmatch %}
 {% endfor %}
-{}
+{%- endmacro %}
 
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
-internal interface UniffiLibUniffiHelperFunctions : Library {
-    {% call decl_kotlin_funs(ci.iter_user_ffi_function_definitions()) %}
+internal interface UniffiLibChecksums : Library {
+{%- call decl_kotlin_funs(ci.iter_checksum_ffi_functions()) %}
 }
 
 // A JNA Library to expose the extern-C FFI definitions.
@@ -76,13 +75,13 @@ internal interface UniffiLibUniffiHelperFunctions : Library {
 internal interface UniffiLib : Library {
     companion object {
         internal val INSTANCE: UniffiLib by lazy {
-            loadIndirect<UniffiLibUniffiHelperFunctions>(componentName = "{{ ci.namespace() }}")
-            .also { lib: UniffiLibUniffiHelperFunctions ->
-                uniffiCheckContractApiVersion(lib)
+            loadIndirect<UniffiLibChecksums>(componentName = "{{ ci.namespace() }}")
+            .also { lib: UniffiLibChecksums ->
                 uniffiCheckApiChecksums(lib)
             }
             loadIndirect<UniffiLib>(componentName = "{{ ci.namespace() }}")
             .also { lib: UniffiLib ->
+                uniffiCheckContractApiVersion(lib)
                 {% for fn in self.initialization_fns() -%}
                 {{ fn }}(lib)
                 {% endfor -%}
@@ -95,12 +94,10 @@ internal interface UniffiLib : Library {
         }
         {%- endif %}
     }
-//     iter_user_ffi_function_definitions
-// iter_ffi_function_definitions_excluding_user_defined
-    {% call decl_kotlin_funs(ci.iter_user_ffi_function_definitions()) %}
+    {%- call decl_kotlin_funs(ci.iter_ffi_function_definitions_excluding_checksums()) %}
 }
 
-private fun uniffiCheckContractApiVersion(lib: UniffiLibChecksums) {
+private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
     // Get the bindings contract version from our ComponentInterface
     val bindings_contract_version = {{ ci.uniffi_contract_version() }}
     // Get the scaffolding contract version by calling the into the dylib
