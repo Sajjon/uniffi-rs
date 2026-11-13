@@ -11,5 +11,4 @@ without being classified as a Rust failure.
 
 The language-mode environment variable does not select a compiler. The old
 compiler fallback still requires running this fixture with actual older Swift
-toolchains. The full compiler and cross-module matrix in
-`docs/swift-typed-throws-plan.md` remains the release acceptance checklist.
+toolchains. Broader compiler and cross-module validation remains outstanding.
