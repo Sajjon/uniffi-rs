@@ -1281,6 +1281,14 @@ mod typed_throws_tests {
         assert!(source.contains("throws(UniffiCallError<Failure>)"));
         assert!(source.contains("#if compiler(>=6.0)"));
         assert_eq!(
+            source
+                .matches("public enum UniffiRuntimeError: LocalizedError")
+                .count(),
+            1
+        );
+        assert!(source.contains("fileprivate typealias UniffiInternalError = UniffiRuntimeError"));
+        assert!(source.contains("fileprivate enum UniffiInternalError: LocalizedError"));
+        assert_eq!(
             generate_header(&omitted, &ci).unwrap(),
             generate_header(&enabled, &ci).unwrap()
         );
@@ -1298,10 +1306,10 @@ mod typed_throws_tests {
             toml::from_str("module_name = 'typed_test'\nexperimental_typed_throws = true").unwrap();
         let generated = generate_swift(&config, &ci).unwrap();
         let internal = generated
-            .split("// An error type for FFI errors.")
+            .split("#if compiler(>=6.0)")
             .nth(1)
             .unwrap()
-            .split("fileprivate extension NSLock")
+            .split("#else")
             .next()
             .unwrap();
         let helpers = generated
@@ -1324,7 +1332,8 @@ mod typed_throws_tests {
                 let _: Int = try uniffiTypedCall(Domain.self) { throw failure }
                 fatalError("expected failure")
             } catch {
-                guard case .binding(.runtime(_)) = error else { fatalError("wrong runtime classification") }
+                guard case .binding(.runtime(let runtime)) = error else { fatalError("wrong runtime classification") }
+                assert(runtime.localizedDescription == failure.localizedDescription)
             }
         }
         do {
@@ -1356,7 +1365,7 @@ mod typed_throws_tests {
         let dir = std::env::temp_dir().join(format!("uniffi-typed-seam-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("main.swift");
-        std::fs::write(&path, format!("import Foundation\n// An error type for FFI errors.{internal}\nstruct RustBuffer {{}}\n/// A declared Rust failure{helpers}\n{harness}")).unwrap();
+        std::fs::write(&path, format!("import Foundation\n{internal}\nstruct RustBuffer {{}}\n/// A declared Rust failure{helpers}\n{harness}")).unwrap();
         let output = std::process::Command::new("swift")
             .arg("-module-cache-path")
             .arg(dir.join("cache"))

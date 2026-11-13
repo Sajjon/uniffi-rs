@@ -291,3 +291,33 @@ public static func < (self: {{ cmp.object_name() | class_name }}, other: {{ cmp.
 {%- macro declaration_throws(func, typed) %}
 {%- if typed %}throws({{ config.call_error_name(ci) }}<{{ func.throws_type().unwrap()|type_name }}>) {% else %}{% call throws(func) %}{% endcall %}{% endif %}
 {%- endmacro %}
+
+{%- macro runtime_error_decl(visibility, name) -%}
+// An error type for FFI errors. These errors occur at the UniFFI level, not
+// the library level.
+{{ visibility }} enum {{ name }}: LocalizedError {
+    case bufferOverflow
+    case incompleteData
+    case unexpectedOptionalTag
+    case unexpectedEnumCase
+    case unexpectedNullPointer
+    case unexpectedRustCallStatusCode
+    case unexpectedRustCallError
+    case unexpectedStaleHandle
+    case rustPanic(_ message: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .bufferOverflow: return "Reading the requested value would read past the end of the buffer"
+        case .incompleteData: return "The buffer still has data after lifting its containing value"
+        case .unexpectedOptionalTag: return "Unexpected optional tag; should be 0 or 1"
+        case .unexpectedEnumCase: return "Raw enum value doesn't match any cases"
+        case .unexpectedNullPointer: return "Raw pointer value was null"
+        case .unexpectedRustCallStatusCode: return "Unexpected RustCallStatus code"
+        case .unexpectedRustCallError: return "CALL_ERROR but no errorClass specified"
+        case .unexpectedStaleHandle: return "The object in the handle map has been dropped already"
+        case let .rustPanic(message): return message
+        }
+    }
+}
+{%- endmacro %}

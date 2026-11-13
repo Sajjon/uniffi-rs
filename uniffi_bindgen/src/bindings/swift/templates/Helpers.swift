@@ -1,30 +1,13 @@
-// An error type for FFI errors. These errors occur at the UniFFI level, not
-// the library level.
-fileprivate enum UniffiInternalError: LocalizedError {
-    case bufferOverflow
-    case incompleteData
-    case unexpectedOptionalTag
-    case unexpectedEnumCase
-    case unexpectedNullPointer
-    case unexpectedRustCallStatusCode
-    case unexpectedRustCallError
-    case unexpectedStaleHandle
-    case rustPanic(_ message: String)
-
-    public var errorDescription: String? {
-        switch self {
-        case .bufferOverflow: return "Reading the requested value would read past the end of the buffer"
-        case .incompleteData: return "The buffer still has data after lifting its containing value"
-        case .unexpectedOptionalTag: return "Unexpected optional tag; should be 0 or 1"
-        case .unexpectedEnumCase: return "Raw enum value doesn't match any cases"
-        case .unexpectedNullPointer: return "Raw pointer value was null"
-        case .unexpectedRustCallStatusCode: return "Unexpected RustCallStatus code"
-        case .unexpectedRustCallError: return "CALL_ERROR but no errorClass specified"
-        case .unexpectedStaleHandle: return "The object in the handle map has been dropped already"
-        case let .rustPanic(message): return message
-        }
-    }
-}
+{%- if config.experimental_typed_throws() %}
+#if compiler(>=6.0)
+{% call swift::runtime_error_decl("public", config.runtime_error_name(ci)) %}{% endcall %}
+fileprivate typealias UniffiInternalError = {{ config.runtime_error_name(ci) }}
+#else
+{% call swift::runtime_error_decl("fileprivate", "UniffiInternalError") %}{% endcall %}
+#endif
+{%- else %}
+{%- call swift::runtime_error_decl("fileprivate", "UniffiInternalError") %}{% endcall %}
+{%- endif %}
 
 fileprivate extension NSLock {
     func withLock<T>(f: () throws -> T) rethrows -> T {
@@ -153,33 +136,6 @@ public enum {{ config.binding_error_name(ci) }}: Swift.Error {
     case unexpected(any Swift.Error)
 }
 
-/// Recognized runtime failures. A reported Rust panic can originate in library code.
-public enum {{ config.runtime_error_name(ci) }}: LocalizedError {
-    case bufferOverflow
-    case incompleteData
-    case unexpectedOptionalTag
-    case unexpectedEnumCase
-    case unexpectedNullPointer
-    case unexpectedRustCallStatusCode
-    case unexpectedRustCallError
-    case unexpectedStaleHandle
-    case rustPanic(String)
-
-    public var errorDescription: String? {
-        switch self {
-        case .bufferOverflow: return UniffiInternalError.bufferOverflow.errorDescription
-        case .incompleteData: return UniffiInternalError.incompleteData.errorDescription
-        case .unexpectedOptionalTag: return UniffiInternalError.unexpectedOptionalTag.errorDescription
-        case .unexpectedEnumCase: return UniffiInternalError.unexpectedEnumCase.errorDescription
-        case .unexpectedNullPointer: return UniffiInternalError.unexpectedNullPointer.errorDescription
-        case .unexpectedRustCallStatusCode: return UniffiInternalError.unexpectedRustCallStatusCode.errorDescription
-        case .unexpectedRustCallError: return UniffiInternalError.unexpectedRustCallError.errorDescription
-        case .unexpectedStaleHandle: return UniffiInternalError.unexpectedStaleHandle.errorDescription
-        case .rustPanic(let message): return message
-        }
-    }
-}
-
 fileprivate struct {{ config.decoded_library_error_name(ci) }}<Failure: Swift.Error>: Swift.Error {
     let failure: Failure
 }
@@ -194,17 +150,7 @@ private func uniffiBindingError(_ error: any Swift.Error) -> {{ config.binding_e
     guard let internalError = error as? UniffiInternalError else {
         return .unexpected(error)
     }
-    switch internalError {
-    case .bufferOverflow: return .runtime(.bufferOverflow)
-    case .incompleteData: return .runtime(.incompleteData)
-    case .unexpectedOptionalTag: return .runtime(.unexpectedOptionalTag)
-    case .unexpectedEnumCase: return .runtime(.unexpectedEnumCase)
-    case .unexpectedNullPointer: return .runtime(.unexpectedNullPointer)
-    case .unexpectedRustCallStatusCode: return .runtime(.unexpectedRustCallStatusCode)
-    case .unexpectedRustCallError: return .runtime(.unexpectedRustCallError)
-    case .unexpectedStaleHandle: return .runtime(.unexpectedStaleHandle)
-    case .rustPanic(let message): return .runtime(.rustPanic(message))
-    }
+    return .runtime(internalError)
 }
 
 private func uniffiTypedCall<T, E: Swift.Error>(

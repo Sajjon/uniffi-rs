@@ -15,8 +15,12 @@ complete release acceptance matrix has not been established.
 - Successfully decoded Rust errors receive a private provenance marker. The
   public boundary catches that marker, rather than guessing from the error's
   Swift type. All other errors map through the nongeneric binding error.
-- Recognized internal failures map explicitly to public runtime cases, retaining
-  panic messages and localized descriptions. Other errors retain their values.
+- On the opted-in Swift 6 branch, `UniffiRuntimeError` is the single runtime
+  error implementation, with a fileprivate `UniffiInternalError` typealias for
+  converters. Other branches retain the private enum. A shared rendering macro
+  defines the cases and diagnostics once; classification groups the runtime
+  error directly, preserving panic messages and localized descriptions. Other
+  errors retain their values.
 - Constructors wrap handle acquisition before delegating to initialization.
   Async calls retain the existing future-freeing `defer` and continuation logic.
 - Callback library errors are unwrapped before the existing error transport;

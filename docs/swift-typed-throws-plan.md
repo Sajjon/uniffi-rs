@@ -143,9 +143,11 @@ lifting has the same UniFFI-versus-other distinction. Keep this wrapper entirely
 on the Swift side; never serialize it as the Rust error enum.
 
 The existing `UniffiInternalError` is `fileprivate`, so it cannot simply be used
-as an associated value in this public API. Introduce an opt-in public
-`UniffiRuntimeError` representation with explicit cases corresponding to the
-current internal failures, and a deliberate mapping at the typed boundary.
+as an associated value in this public API. On the opted-in Swift 6 branch, expose the existing error implementation as
+public `UniffiRuntimeError` and retain `UniffiInternalError` as a fileprivate
+typealias. Render the cases and diagnostics once through a shared template
+macro; the other branches retain the existing private enum. The typed boundary
+can then group recognized failures directly without a duplicate enum or mapping.
 Preserve available diagnostics and document that a reported Rust panic is not
 necessarily a UniFFI bug. Keep default output and internal converter signatures
 unchanged. Public case names and their evolution policy require review; do not
