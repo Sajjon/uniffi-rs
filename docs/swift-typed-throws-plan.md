@@ -174,6 +174,257 @@ remain nonthrowing with their existing behavior. Existing cancellation handling
 (`CALL_CANCELLED` currently traps) is outside this feature; coordinate any future
 `CancellationError` support so it cannot invalidate the chosen thrown type.
 
+## End-user examples
+
+These examples describe the proposed API, not functionality already implemented.
+Rust exported functions and generated Swift functions are shown as declaration
+outlines with bodies omitted; they are not standalone compilable source files.
+Usage snippets show application code. Boilerplate such as scaffolding setup,
+imports, generated conformances, and converters is omitted. The examples assume
+default naming and argument labels. Generated domain-error cases retain UniFFI's
+current capitalized names; the new wrapper cases use the proposed lowercase names.
+
+### A synchronous call and its three error categories
+
+The library author declares an ordinary Rust error and exported function:
+
+```rust
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+pub enum LookupError {
+    #[error("No user with ID {id}")]
+    NotFound { id: u64 },
+    #[error("The service is unavailable")]
+    Unavailable,
+}
+
+#[uniffi::export]
+pub fn user_name(id: u64) -> Result<String, LookupError> // body omitted
+```
+
+Enable the feature in the library's `uniffi.toml` and regenerate the bindings:
+
+```toml
+[bindings.swift]
+experimental_typed_throws = true
+```
+
+The resulting Swift API on a Swift 6 compiler is:
+
+```swift
+public enum LookupError: Swift.Error {
+    case NotFound(id: UInt64)
+    case Unavailable
+}
+
+public func userName(id: UInt64) throws(UniffiCallError<LookupError>) -> String
+```
+
+A Swift application can inspect the typed error without casting the outer error:
+
+```swift
+do {
+    let name = try userName(id: 42)
+    print(name)
+} catch {
+    // In this single-call block, error is UniffiCallError<LookupError>.
+    switch error {
+    case .library(.NotFound(let id)):
+        print("No user with ID \(id)")
+    case .library(.Unavailable):
+        print("Try again later")
+    case .uniffi(let runtimeError):
+        print("Binding/runtime failure: \(runtimeError)")
+    case .unexpected(let underlyingError):
+        print("Other Swift failure: \(underlyingError)")
+    }
+}
+```
+
+The first two branches represent ordinary library outcomes. A recognized malformed
+buffer or reported Rust panic reaches `.uniffi`; it does not become a
+`LookupError`. This simple string-returning example has no configured custom
+conversion, so `.unexpected` is not an expected normal outcome. The wrapper still
+has that case because other generated APIs and external converters can need it.
+The next example demonstrates a concrete source.
+
+These switches show the proposed current cases. Clients of a library built with
+library evolution enabled may also need `@unknown default` handling for public
+nonfrozen enums. Combining unrelated throwing calls in one `do` block can widen
+the inferred caught error type; the example deliberately contains one such call.
+
+Rust callers are unaffected. They still receive the original `Result`:
+
+```rust
+match user_name(42) {
+    Ok(name) => println!("{name}"),
+    Err(LookupError::NotFound { id }) => println!("No user with ID {id}"),
+    Err(LookupError::Unavailable) => println!("Try again later"),
+}
+```
+
+There is no `UniffiCallError` in the Rust API. A direct Rust call does not pass
+through Swift's converters; this setting does not change Rust panic behavior.
+
+### A custom Swift conversion that throws another error
+
+Suppose the Rust API exposes a string-backed custom type and uses the same
+`LookupError`:
+
+```rust
+pub struct DisplayName(pub String);
+uniffi::custom_newtype!(DisplayName, String);
+
+#[uniffi::export]
+pub fn display_name(id: u64) -> Result<DisplayName, LookupError> // body omitted
+```
+
+The library's Swift integration uses an existing application-support module,
+`NameTypes`, with a `ValidatedName` type. Its `init(raw:)` can throw
+`NameValidationError`, and its `rawValue` property returns a `String`. Their
+implementations are outside this example. Configure the conversion alongside
+the opt-in setting:
+
+```toml
+[bindings.swift.custom_types.DisplayName]
+imports = ["NameTypes"]
+type_name = "ValidatedName"
+lift = "try ValidatedName(raw: {})"
+lower = "{}.rawValue"
+```
+
+The proposed generated Swift API is:
+
+```swift
+public typealias DisplayName = ValidatedName
+public func displayName(id: UInt64) throws(UniffiCallError<LookupError>) -> DisplayName
+```
+
+Swift usage distinguishes the conversion's validation failure from a Rust error:
+
+```swift
+import NameTypes
+
+do {
+    let name = try displayName(id: 42)
+    print(name.rawValue)
+} catch {
+    switch error {
+    case .library(let lookupError):
+        print("Rust lookup failed: \(lookupError)")
+    case .uniffi(let runtimeError):
+        print("Binding/runtime failure: \(runtimeError)")
+    case .unexpected(let underlyingError):
+        if let validationError = underlyingError as? NameValidationError {
+            print("Swift rejected the returned name: \(validationError)")
+        } else {
+            print("Other Swift failure: \(underlyingError)")
+        }
+    }
+}
+```
+
+Here Rust can successfully return `Ok(DisplayName(...))`, but Swift validation
+can reject that value. The original `NameValidationError` is preserved in
+`.unexpected`; it is neither a Rust `LookupError` nor a UniFFI runtime error.
+Even if the Swift validator happened to throw `LookupError`, its provenance would
+still make it `.unexpected`, not `.library`.
+
+Rust usage remains ordinary `Result` handling and never invokes this Swift
+validation:
+
+```rust
+match display_name(42) {
+    Ok(name) => println!("{}", name.0),
+    Err(error) => println!("Rust lookup failed: {error}"),
+}
+```
+
+### An asynchronous call
+
+Rust declaration, using the same error type:
+
+```rust
+#[uniffi::export]
+pub async fn fetch_user_name(id: u64) -> Result<String, LookupError> // body omitted
+```
+
+Proposed generated Swift declaration:
+
+```swift
+public func fetchUserName(id: UInt64) async throws(UniffiCallError<LookupError>) -> String
+```
+
+Swift usage inside an async function:
+
+```swift
+do {
+    let name = try await fetchUserName(id: 42)
+    print(name)
+} catch {
+    switch error {
+    case .library(let lookupError):
+        print("Rust lookup failed: \(lookupError)")
+    case .uniffi(let runtimeError):
+        print("Binding/runtime failure: \(runtimeError)")
+    case .unexpected(let underlyingError):
+        print("Other Swift failure: \(underlyingError)")
+    }
+}
+```
+
+Rust usage inside an async function is unchanged:
+
+```rust
+match fetch_user_name(42).await {
+    Ok(name) => println!("{name}"),
+    Err(error) => println!("Rust lookup failed: {error}"),
+}
+```
+
+Typed throws does not itself enable cancellation or change its existing behavior.
+
+### Opting out, older compilers, and nonthrowing functions
+
+With the setting omitted or `false`, or when opted-in generated source is compiled
+by an older supported compiler, the visible Swift API stays untyped:
+
+```swift
+public func userName(id: UInt64) throws -> String
+public func fetchUserName(id: UInt64) async throws -> String
+```
+
+Existing Swift usage therefore continues to work in that mode:
+
+```swift
+do {
+    print(try userName(id: 42))
+} catch let lookupError as LookupError {
+    print("Rust lookup failed: \(lookupError)")
+} catch {
+    print("Other failure: \(error)")
+}
+```
+
+After opting in on Swift 6, migrate that domain-error catch to the wrapper's
+`.library` case, as shown above. A Swift client supporting both compiler branches
+can select the corresponding handling with `#if compiler(>=6.0)`, provided it
+knows its bindings were generated with the option enabled. Compiler version alone
+does not reveal a library's opt-in setting.
+
+An existing nonthrowing export stays nonthrowing in every mode:
+
+```rust
+#[uniffi::export]
+pub fn library_version() -> String // body omitted
+```
+
+```swift
+public func libraryVersion() -> String
+```
+
+Rust usage remains `let version = library_version();`; Swift usage remains
+`let version = libraryVersion()`. No new `try` or wrapper is introduced.
+
 ## Implementation sequence
 
 1. **Capture the baseline and settle the API.** Generate representative fixtures
