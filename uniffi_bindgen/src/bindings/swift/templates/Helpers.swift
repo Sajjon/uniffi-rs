@@ -138,3 +138,98 @@ private func uniffiTraitInterfaceCallWithError<T, E>(
         callStatus.pointee.errorBuf = {{ Type::String.borrow()|lower_fn }}(String(describing: error))
     }
 }
+
+{%- if config.experimental_typed_throws() %}
+#if compiler(>=6.0)
+/// A declared Rust failure or a failure encountered crossing the binding.
+public enum {{ config.typed_error_name(ci, "UniffiCallError") }}<Failure: Swift.Error>: Swift.Error {
+    case library(Failure)
+    case binding({{ config.typed_error_name(ci, "UniffiBindingError") }})
+}
+
+/// Binding failures retain the original Swift error when it is not recognized.
+public enum {{ config.typed_error_name(ci, "UniffiBindingError") }}: Swift.Error {
+    case runtime({{ config.typed_error_name(ci, "UniffiRuntimeError") }})
+    case unexpected(any Swift.Error)
+}
+
+/// Recognized runtime failures. A reported Rust panic can originate in library code.
+public enum {{ config.typed_error_name(ci, "UniffiRuntimeError") }}: LocalizedError {
+    case bufferOverflow
+    case incompleteData
+    case unexpectedOptionalTag
+    case unexpectedEnumCase
+    case unexpectedNullPointer
+    case unexpectedRustCallStatusCode
+    case unexpectedRustCallError
+    case unexpectedStaleHandle
+    case rustPanic(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .bufferOverflow: return UniffiInternalError.bufferOverflow.errorDescription
+        case .incompleteData: return UniffiInternalError.incompleteData.errorDescription
+        case .unexpectedOptionalTag: return UniffiInternalError.unexpectedOptionalTag.errorDescription
+        case .unexpectedEnumCase: return UniffiInternalError.unexpectedEnumCase.errorDescription
+        case .unexpectedNullPointer: return UniffiInternalError.unexpectedNullPointer.errorDescription
+        case .unexpectedRustCallStatusCode: return UniffiInternalError.unexpectedRustCallStatusCode.errorDescription
+        case .unexpectedRustCallError: return UniffiInternalError.unexpectedRustCallError.errorDescription
+        case .unexpectedStaleHandle: return UniffiInternalError.unexpectedStaleHandle.errorDescription
+        case .rustPanic(let message): return message
+        }
+    }
+}
+
+fileprivate struct {{ config.typed_error_name(ci, "UniffiDecodedLibraryError") }}<Failure: Swift.Error>: Swift.Error {
+    let failure: Failure
+}
+
+private func uniffiLibraryError<E: Swift.Error>(
+    _ lift: @escaping (RustBuffer) throws -> E
+) -> (RustBuffer) throws -> {{ config.typed_error_name(ci, "UniffiDecodedLibraryError") }}<E> {
+    { {{ config.typed_error_name(ci, "UniffiDecodedLibraryError") }}(failure: try lift($0)) }
+}
+
+private func uniffiBindingError(_ error: any Swift.Error) -> {{ config.typed_error_name(ci, "UniffiBindingError") }} {
+    guard let internalError = error as? UniffiInternalError else {
+        return .unexpected(error)
+    }
+    switch internalError {
+    case .bufferOverflow: return .runtime(.bufferOverflow)
+    case .incompleteData: return .runtime(.incompleteData)
+    case .unexpectedOptionalTag: return .runtime(.unexpectedOptionalTag)
+    case .unexpectedEnumCase: return .runtime(.unexpectedEnumCase)
+    case .unexpectedNullPointer: return .runtime(.unexpectedNullPointer)
+    case .unexpectedRustCallStatusCode: return .runtime(.unexpectedRustCallStatusCode)
+    case .unexpectedRustCallError: return .runtime(.unexpectedRustCallError)
+    case .unexpectedStaleHandle: return .runtime(.unexpectedStaleHandle)
+    case .rustPanic(let message): return .runtime(.rustPanic(message))
+    }
+}
+
+private func uniffiTypedCall<T, E: Swift.Error>(
+    _ failure: E.Type, _ body: () throws -> T
+) throws({{ config.typed_error_name(ci, "UniffiCallError") }}<E>) -> T {
+    do { return try body() }
+    catch let decoded as {{ config.typed_error_name(ci, "UniffiDecodedLibraryError") }}<E> { throw .library(decoded.failure) }
+    catch { throw .binding(uniffiBindingError(error)) }
+}
+
+private func uniffiTypedCall<T, E: Swift.Error>(
+    _ failure: E.Type, _ body: () async throws -> T
+) async throws({{ config.typed_error_name(ci, "UniffiCallError") }}<E>) -> T {
+    do { return try await body() }
+    catch let decoded as {{ config.typed_error_name(ci, "UniffiDecodedLibraryError") }}<E> { throw .library(decoded.failure) }
+    catch { throw .binding(uniffiBindingError(error)) }
+}
+private func uniffiCallbackLift<T>(_ body: () throws -> T) throws -> T {
+    do { return try body() }
+    catch { throw uniffiBindingError(error) }
+}
+#else
+private func uniffiCallbackLift<T>(_ body: () throws -> T) throws -> T { try body() }
+private func uniffiLibraryError<E: Swift.Error>(
+    _ lift: @escaping (RustBuffer) throws -> E
+) -> (RustBuffer) throws -> E { lift }
+#endif
+{%- endif %}

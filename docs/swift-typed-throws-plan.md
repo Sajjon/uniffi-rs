@@ -1,6 +1,8 @@
 # Plan: opt-in typed throws for Swift bindings
 
-Status: proposed; implementation is not part of this change.
+Status: experimental implementation added; full release gates remain open. See
+[implementation validation](swift-typed-throws-validation.md) for measured results
+and outstanding acceptance work.
 
 Researched on 2026-11-13 against local commit
 `482095c1ba1b76a1393b582e0589e2fdc9c64b14`.

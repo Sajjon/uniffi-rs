@@ -2440,6 +2440,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "uniffi-fixture-swift-typed-throws"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "thiserror",
+ "uniffi",
+]
+
+[[package]]
 name = "uniffi-fixture-time"
 version = "0.22.0"
 dependencies = [

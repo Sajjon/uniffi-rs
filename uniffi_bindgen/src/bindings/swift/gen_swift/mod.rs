@@ -172,6 +172,8 @@ pub struct Config {
     #[serde(default)]
     omit_checksums: bool,
     omit_argument_labels: Option<bool>,
+    #[serde(default)]
+    experimental_typed_throws: bool,
     generate_immutable_records: Option<bool>,
     #[serde(default)]
     mutable_records: HashSet<String>,
@@ -220,6 +222,25 @@ impl CustomTypeConfig {
 }
 
 impl Config {
+    // Use the normal Swift type oracle, including configured renames already
+    // applied to the interface, when reserving support type names.
+    pub fn typed_error_name(&self, ci: &ComponentInterface, base: &str) -> String {
+        let names: HashSet<_> = ci
+            .iter_local_types()
+            .chain(ci.iter_external_types())
+            .map(|t| SwiftCodeOracle.find(t).type_label())
+            .collect();
+        let mut name = base.to_owned();
+        while names.contains(&name) {
+            name.push('_');
+        }
+        name
+    }
+
+    pub fn experimental_typed_throws(&self) -> bool {
+        self.experimental_typed_throws
+    }
+
     /// The name of the Swift module containing the high-level foreign-language bindings.
     /// Panics if the module name hasn't been configured.
     pub fn module_name(&self) -> String {
@@ -1202,5 +1223,130 @@ pub mod filters {
         _: &dyn askama::Values,
     ) -> Result<(String, String), askama::Error> {
         Ok(SwiftCodeOracle.object_names(obj))
+    }
+}
+
+#[cfg(test)]
+mod typed_throws_tests {
+    use super::*;
+
+    fn interface() -> ComponentInterface {
+        ComponentInterface::from_webidl(
+            r#"namespace typed_test { [Throws=Failure] string lookup(); string version(); };
+            [Error] enum Failure { "Missing", "Unavailable" };
+            callback interface Callback { [Throws=Failure] string lookup(); };"#,
+            "typed_test",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn explicit_opt_in() {
+        let ci = interface();
+        let omitted: Config = toml::from_str("module_name = 'typed_test'").unwrap();
+        let disabled: Config =
+            toml::from_str("module_name = 'typed_test'\nexperimental_typed_throws = false")
+                .unwrap();
+        let enabled: Config =
+            toml::from_str("module_name = 'typed_test'\nexperimental_typed_throws = true").unwrap();
+        assert_eq!(
+            generate_swift(&omitted, &ci).unwrap(),
+            generate_swift(&disabled, &ci).unwrap()
+        );
+        assert!(!generate_swift(&omitted, &ci)
+            .unwrap()
+            .contains("UniffiCallError"));
+        let source = generate_swift(&enabled, &ci).unwrap();
+        assert!(source.contains("throws(UniffiCallError<Failure>)"));
+        assert!(source.contains("#if compiler(>=6.0)"));
+        assert_eq!(
+            generate_header(&omitted, &ci).unwrap(),
+            generate_header(&enabled, &ci).unwrap()
+        );
+        for value in ["'true'", "1", "[]"] {
+            assert!(
+                toml::from_str::<Config>(&format!("experimental_typed_throws = {value}")).is_err()
+            );
+        }
+    }
+    #[test]
+    #[ignore = "requires an installed Swift 6 compiler"]
+    fn runtime_classification() {
+        let ci = interface();
+        let config: Config =
+            toml::from_str("module_name = 'typed_test'\nexperimental_typed_throws = true").unwrap();
+        let generated = generate_swift(&config, &ci).unwrap();
+        let internal = generated
+            .split("// An error type for FFI errors.")
+            .nth(1)
+            .unwrap()
+            .split("fileprivate extension NSLock")
+            .next()
+            .unwrap();
+        let helpers = generated
+            .split("/// A declared Rust failure")
+            .nth(1)
+            .unwrap()
+            .split("#else\nprivate func uniffiCallbackLift")
+            .next()
+            .unwrap();
+        let harness = r#"
+        enum Domain: Error { case missing }
+        final class Original: Error, @unchecked Sendable {}
+        let original = Original()
+        private let recognized: [UniffiInternalError] = [.bufferOverflow, .incompleteData,
+            .unexpectedOptionalTag, .unexpectedEnumCase, .unexpectedNullPointer,
+            .unexpectedRustCallStatusCode, .unexpectedRustCallError,
+            .unexpectedStaleHandle, .rustPanic("panic message")]
+        for failure in recognized {
+            do {
+                let _: Int = try uniffiTypedCall(Domain.self) { throw failure }
+                fatalError("expected failure")
+            } catch {
+                guard case .binding(.runtime(_)) = error else { fatalError("wrong runtime classification") }
+            }
+        }
+        do {
+            let _: Int = try uniffiTypedCall(Domain.self) { throw Domain.missing }
+            fatalError("expected failure")
+        } catch {
+            guard case .binding(.unexpected(let underlying)) = error,
+                underlying is Domain else { fatalError("custom domain was treated as library") }
+        }
+        do {
+            let _: Int = try uniffiTypedCall(Domain.self) { throw original }
+            fatalError("expected failure")
+        } catch {
+            guard case .binding(.unexpected(let underlying)) = error,
+                underlying as? Original === original else { fatalError("lost original error") }
+        }
+        do {
+            let _: Int = try uniffiTypedCall(Domain.self) {
+                throw UniffiDecodedLibraryError(failure: Domain.missing)
+            }
+            fatalError("expected failure")
+        } catch .library(.missing) {} catch { fatalError("wrong library classification") }
+        let exact: () throws(UniffiCallError<Domain>) -> Int = {
+            try uniffiTypedCall(Domain.self) { 42 }
+        }
+        let success = try exact()
+        assert(success == 42)
+        "#;
+        let dir = std::env::temp_dir().join(format!("uniffi-typed-seam-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("main.swift");
+        std::fs::write(&path, format!("import Foundation\n// An error type for FFI errors.{internal}\nstruct RustBuffer {{}}\n/// A declared Rust failure{helpers}\n{harness}")).unwrap();
+        let output = std::process::Command::new("swift")
+            .arg("-module-cache-path")
+            .arg(dir.join("cache"))
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

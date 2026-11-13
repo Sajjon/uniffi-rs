@@ -7,7 +7,7 @@
 {%- macro to_ffi_call(func) -%}
     {%- call is_try(func) %}{% endcall -%}
     {%- if let(Some(e)) = func.throws_type() -%}
-        rustCallWithError({{ e|ffi_error_converter_name }}_lift) {
+        rustCallWithError({% if config.experimental_typed_throws() %}uniffiLibraryError({{ e|ffi_error_converter_name }}_lift){% else %}{{ e|ffi_error_converter_name }}_lift{% endif %}) {
     {%- else -%}
         rustCall() {
     {%- endif %}
@@ -47,21 +47,52 @@
 
 // eg, `public func foo_bar() { body }`
 {%- macro func_decl(func_decl, callable, indent) %}
+{%- if config.experimental_typed_throws() && callable.throws() %}
+#if compiler(>=6.0)
+{%- call func_decl_impl(func_decl, callable, indent, true) %}{% endcall %}
+#else
+{%- call func_decl_impl(func_decl, callable, indent, false) %}{% endcall %}
+#endif
+{%- else %}
+{%- call func_decl_impl(func_decl, callable, indent, false) %}{% endcall %}
+{%- endif %}
+{%- endmacro %}
+{%- macro func_decl_impl(func_decl, callable, indent, typed) %}
 {%- call docstring(callable, indent) %}{% endcall %}
 {{ func_decl }} {{ callable.name()|fn_name }}(
     {%- call arg_list_decl(callable) %}{% endcall -%})
     {%- call is_async(callable) %}{% endcall %}
-    {%- call throws(callable) %}{% endcall %}
+    {%- call declaration_throws(callable, typed) %}{% endcall %}
     {%- if let Some(return_type) = callable.return_type() %} -> {{ return_type|type_name }} {%- endif %}  {
+    {%- if typed %}
+    return try {% if callable.is_async() %}await {% endif %}uniffiTypedCall({{ callable.throws_type().unwrap()|type_name }}.self) {
+    {%- endif %}
     {%- call call_body(callable) %}{% endcall %}
+    {%- if typed %}
+    }
+    {%- endif %}
 }
 {%- endmacro %}
 
 // primary ctor - no name, no return-type.
 {%- macro ctor_decl(callable, indent) %}
+{%- if config.experimental_typed_throws() && callable.throws() %}
+#if compiler(>=6.0)
+{%- call ctor_decl_impl(callable, indent, true) %}{% endcall %}
+#else
+{%- call ctor_decl_impl(callable, indent, false) %}{% endcall %}
+#endif
+{%- else %}
+{%- call ctor_decl_impl(callable, indent, false) %}{% endcall %}
+{%- endif %}
+{%- endmacro %}
+{%- macro ctor_decl_impl(callable, indent, typed) %}
 {%- call docstring(callable, indent) %}{% endcall %}
 public convenience init(
-    {%- call arg_list_decl(callable) %}{% endcall -%}) {%- call is_async(callable) %}{% endcall %} {%- call throws(callable) %}{% endcall %} {
+    {%- call arg_list_decl(callable) %}{% endcall -%}) {%- call is_async(callable) %}{% endcall %} {%- call declaration_throws(callable, typed) %}{% endcall %} {
+    {%- if typed %}
+    let handle = try {% if callable.is_async() %}await {% endif %}uniffiTypedCall({{ callable.throws_type().unwrap()|type_name }}.self) {
+    {%- endif %}
     {%- if callable.is_async() %}
     let handle =
         {%- call call_async(callable) %}{% endcall %}
@@ -73,6 +104,10 @@ public convenience init(
     {%- else %}
     let handle =
         {% call to_ffi_call(callable) %}{% endcall %}
+    {%- endif %}
+    {%- if typed %}
+    return handle
+    }
     {%- endif %}
     self.init(unsafeFromHandle: handle)
 }
@@ -119,7 +154,7 @@ public convenience init(
             {%- endmatch %}
             {%- match callable.throws_type() %}
             {%- when Some with (e) %}
-            errorHandler: {{ e|ffi_error_converter_name }}_lift
+            errorHandler: {% if config.experimental_typed_throws() %}uniffiLibraryError({{ e|ffi_error_converter_name }}_lift){% else %}{{ e|ffi_error_converter_name }}_lift{% endif %}
             {%- else %}
             errorHandler: nil
             {% endmatch %}
@@ -251,4 +286,8 @@ public static func < (self: {{ cmp.object_name() | class_name }}, other: {{ cmp.
     ) < 0
 }
 {%- endif %}
+{%- endmacro %}
+
+{%- macro declaration_throws(func, typed) %}
+{%- if typed %}throws({{ config.typed_error_name(ci, "UniffiCallError") }}<{{ func.throws_type().unwrap()|type_name }}>) {% else %}{% call throws(func) %}{% endcall %}{% endif %}
 {%- endmacro %}

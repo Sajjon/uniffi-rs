@@ -45,11 +45,27 @@ fileprivate struct {{ trait_impl }} {
                 guard let uniffiObj = try? {{ ffi_converter_name }}.handleMap.get(handle: uniffiHandle) else {
                     throw UniffiInternalError.unexpectedStaleHandle
                 }
+                {%- if config.experimental_typed_throws() && meth.throws() %}
+                do {
+                {%- endif %}
                 return {% if meth.throws() %}try {% endif %}{% if meth.is_async() %}await {% endif %}uniffiObj.{{ meth.name()|fn_name }}(
                     {%- for arg in meth.arguments() %}
-                    {% if !config.omit_argument_labels() %} {{ arg.name()|arg_name }}: {% endif %}try {{ arg|lift_fn }}({{ arg.name()|var_name }}){% if !loop.last %},{% endif %}
+                    {% if !config.omit_argument_labels() %} {{ arg.name()|arg_name }}: {% endif %}{% if config.experimental_typed_throws() %}try uniffiCallbackLift { try {{ arg|lift_fn }}({{ arg.name()|var_name }}) }{% else %}try {{ arg|lift_fn }}({{ arg.name()|var_name }}){% endif %}{% if !loop.last %},{% endif %}
                     {%- endfor %}
                 )
+                {%- if config.experimental_typed_throws() && meth.throws() %}
+                } catch {
+#if compiler(>=6.0)
+                    if let wrapped = error as? {{ config.typed_error_name(ci, "UniffiCallError") }}<{{ meth.throws_type().unwrap()|type_name }}> {
+                        switch wrapped {
+                        case .library(let failure): throw failure
+                        case .binding(let failure): throw failure
+                        }
+                    }
+#endif
+                    throw error
+                }
+                {%- endif %}
             }
             {%- if !meth.is_async() %}
 

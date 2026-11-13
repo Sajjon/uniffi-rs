@@ -34,3 +34,58 @@ more likely to change than other configurations.
 cdylib_name = "mycrate_ffi"
 omit_argument_labels = true
 ```
+
+### Experimental typed throws
+
+Set `experimental_typed_throws = true` in `[bindings.swift]` to generate
+`throws(UniffiCallError<YourError>)` for Rust APIs returning `Result`.
+The default is `false`. Nonthrowing APIs remain nonthrowing.
+
+The generated source uses complete declarations guarded by `#if compiler(>=6.0)`.
+Swift 6 compilers enable typed throws in both Swift 5 and Swift 6 language modes;
+older compilers use the legacy untyped API. This does not raise deployment targets.
+
+On the typed branch, migrate domain-error catches to the wrapper:
+
+```swift
+do {
+    let result = try lookup()
+    print(result)
+} catch .library(let failure) {
+    print("Rust library failure: \(failure)")
+} catch {
+    switch error {
+    case .library(let failure): print(failure)
+    case .binding(let failure): reportBindingFailure(failure)
+    }
+}
+
+func reportBindingFailure(_ failure: UniffiBindingError) {
+    switch failure {
+    case .runtime(let runtime): print(runtime)
+    case .unexpected(let underlying): print(underlying)
+    }
+}
+```
+
+`library` contains only a successfully decoded Rust error. `binding.runtime`
+contains recognized buffer, handle, status, and reported Rust panic failures;
+a panic can originate in library code. `binding.unexpected` preserves the original
+Swift error, including errors thrown by custom conversions, even when their type
+matches the declared Rust error. These enums are not frozen. Support names gain
+underscores when necessary to avoid collisions with generated user types.
+
+Opted-in callback and trait implementations must use the same typed signature.
+Throw `.library(yourError)` for a Rust domain failure or `.binding(...)` for a
+binding failure. Only the library case is serialized as the declared Rust error;
+binding failures cross the callback transport as diagnostic strings. Swift error
+identity and classification do not survive that round trip.
+
+Each generated module owns distinct wrapper types. Private errors from external
+converters are preserved as unexpected errors rather than identified by their
+text. Changing this setting requires regenerating source, migrating callback
+conformances, and rebuilding Swift modules. Libraries distributing generated
+source expose different APIs depending on compiler capability; clients supporting
+both branches must guard their catch patterns accordingly. Compiler version alone
+does not reveal whether a library opted in. No cross-mode Swift binary
+compatibility is promised. Cancellation behavior is unchanged.

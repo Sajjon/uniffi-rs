@@ -1,0 +1,7 @@
+[bindings.swift]
+experimental_typed_throws = true
+
+[bindings.swift.custom_types.ValidatedName]
+type_name = "String"
+lift = "try { (_: String) throws -> String in throw LookupError.Unavailable }({})"
+lower = "{}"
