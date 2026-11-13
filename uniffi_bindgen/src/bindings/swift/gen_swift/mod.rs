@@ -172,6 +172,10 @@ pub struct Config {
     #[serde(default)]
     omit_checksums: bool,
     omit_argument_labels: Option<bool>,
+    #[serde(default)]
+    experimental_typed_throws: bool,
+    #[serde(skip)]
+    typed_error_names: Option<TypedErrorNames>,
     generate_immutable_records: Option<bool>,
     #[serde(default)]
     mutable_records: HashSet<String>,
@@ -219,7 +223,96 @@ impl CustomTypeConfig {
     }
 }
 
+const CALL_ERROR_NAME: &str = "CallError";
+const BINDING_ERROR_NAME: &str = "BindingError";
+const RUNTIME_ERROR_NAME: &str = "RuntimeError";
+const DECODED_LIBRARY_ERROR_NAME: &str = "DecodedLibraryError";
+
+#[derive(Debug, Clone)]
+struct TypedErrorNames {
+    namespace: String,
+    call: String,
+    binding: String,
+    runtime: String,
+    decoded: String,
+}
+
 impl Config {
+    fn prepare_typed_errors(mut self, ci: &ComponentInterface) -> Result<Self> {
+        if self.experimental_typed_throws {
+            for ty in ci.iter_local_types().chain(ci.iter_external_types()) {
+                if let Type::Object { name, .. } = ty {
+                    let owner = ty
+                        .crate_name()
+                        .and_then(|name| ci.find_component_interface(name))
+                        .unwrap_or(ci);
+                    if owner.is_name_used_as_error(name)
+                        && owner
+                            .get_object_definition(name)
+                            .is_some_and(|obj| obj.has_callback_interface())
+                    {
+                        anyhow::bail!("Swift typed throws does not support with_foreign trait error `{name}`; the legacy Swift error converter also requires a concrete Error type");
+                    }
+                }
+            }
+            let namespace = format!("{}Errors", SwiftCodeOracle.class_name(ci.crate_name()));
+            if ci
+                .iter_local_types()
+                .chain(ci.iter_external_types())
+                .any(|t| SwiftCodeOracle.find(t).type_label() == namespace)
+            {
+                anyhow::bail!("Swift typed throws namespace `{namespace}` conflicts with a generated type; rename the conflicting type");
+            }
+            self.typed_error_names = Some(TypedErrorNames {
+                call: format!("{namespace}.{CALL_ERROR_NAME}"),
+                binding: format!("{namespace}.{BINDING_ERROR_NAME}"),
+                runtime: format!("{namespace}.{RUNTIME_ERROR_NAME}"),
+                decoded: format!("{namespace}.{DECODED_LIBRARY_ERROR_NAME}"),
+                namespace,
+            });
+        }
+        Ok(self)
+    }
+
+    fn typed_error_names(&self) -> &TypedErrorNames {
+        self.typed_error_names
+            .as_ref()
+            .expect("typed error names prepared before rendering")
+    }
+
+    pub fn error_namespace(&self) -> &str {
+        &self.typed_error_names().namespace
+    }
+    pub fn call_error_name(&self) -> &str {
+        &self.typed_error_names().call
+    }
+    pub fn binding_error_name(&self) -> &str {
+        &self.typed_error_names().binding
+    }
+    pub fn runtime_error_name(&self) -> &str {
+        &self.typed_error_names().runtime
+    }
+    pub fn decoded_library_error_name(&self) -> &str {
+        &self.typed_error_names().decoded
+    }
+
+    pub fn call_error_base_name(&self) -> &'static str {
+        CALL_ERROR_NAME
+    }
+    pub fn binding_error_base_name(&self) -> &'static str {
+        BINDING_ERROR_NAME
+    }
+    pub fn runtime_error_base_name(&self) -> &'static str {
+        RUNTIME_ERROR_NAME
+    }
+    pub fn decoded_library_error_base_name(&self) -> &'static str {
+        DECODED_LIBRARY_ERROR_NAME
+    }
+
+    pub fn experimental_typed_throws(&self) -> bool {
+        self.experimental_typed_throws
+    }
+
     /// The name of the Swift module containing the high-level foreign-language bindings.
     /// Panics if the module name hasn't been configured.
     pub fn module_name(&self) -> String {
@@ -522,7 +615,7 @@ pub fn generate_bindings(config: &Config, ci: &ComponentInterface) -> Result<Bin
     let header = BridgingHeader::new(config, ci)
         .render()
         .context("failed to render Swift bridging header")?;
-    let library = SwiftWrapper::new(config.clone(), ci)
+    let library = SwiftWrapper::new(config.clone().prepare_typed_errors(ci)?, ci)
         .render()
         .context("failed to render Swift library")?;
     let modulemap = if config.generate_module_map() {
@@ -550,7 +643,7 @@ pub fn generate_header(config: &Config, ci: &ComponentInterface) -> Result<Strin
 
 /// Generate the swift source for a component
 pub fn generate_swift(config: &Config, ci: &ComponentInterface) -> Result<String> {
-    SwiftWrapper::new(config.clone(), ci)
+    SwiftWrapper::new(config.clone().prepare_typed_errors(ci)?, ci)
         .render()
         .context("failed to render Swift library")
 }
@@ -1202,5 +1295,307 @@ pub mod filters {
         _: &dyn askama::Values,
     ) -> Result<(String, String), askama::Error> {
         Ok(SwiftCodeOracle.object_names(obj))
+    }
+}
+
+#[cfg(test)]
+mod typed_throws_tests {
+    use super::*;
+
+    #[derive(Template)]
+    #[template(syntax = "swift", escape = "none", path = "TypedThrowsTest.swift")]
+    struct Harness<'a> {
+        config: Config,
+        harness: &'a str,
+    }
+    fn interface() -> ComponentInterface {
+        ComponentInterface::from_webidl(
+            r#"namespace typed_test { [Throws=Failure] string lookup(); string version(); };
+            [Error] enum Failure { "Missing", "Unavailable" };
+            callback interface Callback { [Throws=Failure] string lookup(); void notify(string value); };"#,
+            "typed_test",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn explicit_opt_in() {
+        let ci = interface();
+        let omitted: Config = toml::from_str("module_name = 'typed_test'").unwrap();
+        let disabled: Config =
+            toml::from_str("module_name = 'typed_test'\nexperimental_typed_throws = false")
+                .unwrap();
+        let enabled: Config =
+            toml::from_str("module_name = 'typed_test'\nexperimental_typed_throws = true").unwrap();
+        assert_eq!(
+            generate_swift(&omitted, &ci).unwrap(),
+            generate_swift(&disabled, &ci).unwrap()
+        );
+        assert!(!generate_swift(&omitted, &ci)
+            .unwrap()
+            .contains("TypedTestErrors"));
+        let source = generate_swift(&enabled, &ci).unwrap();
+        assert!(source.contains("throws(TypedTestErrors.CallError<Failure>)"));
+        assert!(source.contains("#if compiler(>=6.0)"));
+        assert_eq!(
+            source
+                .matches("public enum RuntimeError: LocalizedError")
+                .count(),
+            1
+        );
+        assert!(source
+            .contains("fileprivate typealias UniffiInternalError = TypedTestErrors.RuntimeError"));
+        assert!(source.contains("fileprivate enum UniffiInternalError: LocalizedError"));
+        assert!(source.contains("value: try FfiConverterString.lift(value)"));
+        assert!(!source.contains("value: try uniffiCallbackLift"));
+        assert_eq!(
+            generate_header(&omitted, &ci).unwrap(),
+            generate_header(&enabled, &ci).unwrap()
+        );
+        for value in ["'true'", "1", "[]"] {
+            assert!(
+                toml::from_str::<Config>(&format!("experimental_typed_throws = {value}")).is_err()
+            );
+        }
+    }
+    #[test]
+    fn runtime_classification() {
+        let ci = interface();
+        let config: Config =
+            toml::from_str("module_name = 'typed_test'\nexperimental_typed_throws = true").unwrap();
+        let compiler = std::process::Command::new("swift")
+            .arg("--version")
+            .output();
+        let Ok(compiler) = compiler else {
+            eprintln!("Swift is not installed; Swift fixture CI runs this coverage");
+            return;
+        };
+        let version = String::from_utf8_lossy(&compiler.stdout);
+        let major = version
+            .split("Swift version ")
+            .nth(1)
+            .and_then(|v| v.split('.').next())
+            .and_then(|v| v.parse::<u32>().ok());
+        if !compiler.status.success() || major.is_none_or(|major| major < 6) {
+            eprintln!("Swift 6 is required for typed runtime tests: {version}");
+            return;
+        }
+        let harness = r#"
+        enum Domain: LocalizedError {
+            case missing
+            var errorDescription: String? { "domain diagnostic" }
+        }
+        final class Original: Error, @unchecked Sendable {}
+        let original = Original()
+        private let recognized: [UniffiInternalError] = [.bufferOverflow, .incompleteData,
+            .unexpectedOptionalTag, .unexpectedEnumCase, .unexpectedNullPointer,
+            .unexpectedRustCallStatusCode, .unexpectedRustCallError,
+            .unexpectedStaleHandle, .rustPanic("panic message")]
+        for failure in recognized {
+            do {
+                let _: Int = try uniffiTypedCall(Domain.self) { throw failure }
+                fatalError("expected failure")
+            } catch {
+                guard case .binding(.runtime(let runtime)) = error else { fatalError("wrong runtime classification") }
+                assert(runtime.localizedDescription == failure.localizedDescription)
+                assert(error.localizedDescription == failure.localizedDescription)
+            }
+        }
+        do {
+            let _: Int = try uniffiTypedCall(Domain.self) { throw Domain.missing }
+            fatalError("expected failure")
+        } catch {
+            guard case .binding(.unexpected(let underlying)) = error,
+                underlying is Domain else { fatalError("custom domain was treated as library") }
+        }
+        do {
+            let _: Int = try uniffiTypedCall(Domain.self) { throw original }
+            fatalError("expected failure")
+        } catch {
+            guard case .binding(.unexpected(let underlying)) = error,
+                underlying as? Original === original else { fatalError("lost original error") }
+        }
+        do {
+            let _: Int = try uniffiTypedCall(Domain.self) {
+                throw TypedTestErrors.DecodedLibraryError(failure: Domain.missing)
+            }
+            fatalError("expected failure")
+        } catch {
+            guard case .library(.missing) = error else { fatalError("wrong library classification") }
+            assert(error.localizedDescription == "domain diagnostic")
+        }
+        assert(String(describing: TypedTestErrors.BindingError.runtime(.incompleteData)) == String(describing: TypedTestErrors.RuntimeError.incompleteData))
+        let exact: () throws(TypedTestErrors.CallError<Domain>) -> Int = {
+            try uniffiTypedCall(Domain.self) { 42 }
+        }
+        let success = try exact()
+        assert(success == 42)
+        "#;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("main.swift");
+        let source = Harness {
+            config: config.prepare_typed_errors(&ci).unwrap(),
+            harness,
+        }
+        .render()
+        .unwrap();
+        std::fs::write(&path, source).unwrap();
+        let output = std::process::Command::new("swift")
+            .arg("-module-cache-path")
+            .arg(dir.path().join("cache"))
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    #[test]
+    fn stable_namespace_and_collision_errors() {
+        let config: Config =
+            toml::from_str("module_name = 'test'\nexperimental_typed_throws = true").unwrap();
+        let ci = ComponentInterface::from_webidl(
+            "namespace typed_test {}; dictionary TypedTestErrors { string value; };",
+            "typed_test",
+        )
+        .unwrap();
+        for result in [
+            generate_swift(&config, &ci).map(|_| ()),
+            generate_bindings(&config, &ci).map(|_| ()),
+        ] {
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("namespace `TypedTestErrors` conflicts"));
+        }
+        let ci = interface();
+        let prepared = config.prepare_typed_errors(&ci).unwrap();
+        assert_eq!(prepared.call_error_name(), "TypedTestErrors.CallError");
+        assert_eq!(
+            prepared.binding_error_name(),
+            "TypedTestErrors.BindingError"
+        );
+    }
+
+    #[test]
+    fn foreign_trait_error_legacy_baseline() {
+        let mut ci = ComponentInterface::from_webidl(
+            "namespace foreign_error { [Throws=ForeignError] void fail(); }; [Trait, WithForeign] interface ForeignError { string message(); };", "foreign_error"
+        ).unwrap();
+        ci.derive_ffi_funcs().unwrap();
+        let config: Config =
+            toml::from_str("module_name = 'foreign_error'\nexperimental_typed_throws = true")
+                .unwrap();
+        assert!(generate_swift(&config, &ci)
+            .unwrap_err()
+            .to_string()
+            .contains("with_foreign trait error"));
+        let config: Config = toml::from_str("module_name = 'foreign_error'").unwrap();
+        let legacy = generate_bindings(&config, &ci).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.swift");
+        std::fs::write(&path, legacy.library).unwrap();
+        std::fs::write(dir.path().join(config.header_filename()), legacy.header).unwrap();
+        std::fs::write(
+            dir.path().join("module.modulemap"),
+            legacy.modulemap.unwrap(),
+        )
+        .unwrap();
+        let output = std::process::Command::new("swiftc")
+            .arg("-typecheck")
+            .arg("-I")
+            .arg(dir.path())
+            .arg("-module-cache-path")
+            .arg(dir.path().join("cache"))
+            .arg(&path)
+            .output();
+        let Ok(output) = output else {
+            eprintln!("Swift is not installed; skipping legacy compile probe");
+            return;
+        };
+        let diagnostics = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success()
+                && diagnostics.contains("ForeignError")
+                && diagnostics.contains("conform to 'Error'"),
+            "{diagnostics}"
+        );
+    }
+
+    #[test]
+    fn support_names_coexist_in_one_module() {
+        let mut sources = vec![];
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["first_crate", "second_crate"] {
+            let ci =
+                ComponentInterface::from_webidl(&format!("namespace {name} {{}};"), name).unwrap();
+            let config: Config = toml::from_str("experimental_typed_throws = true").unwrap();
+            let source = Harness {
+                config: config.prepare_typed_errors(&ci).unwrap(),
+                harness: "",
+            }
+            .render()
+            .unwrap();
+            let path = dir.path().join(format!("{name}.swift"));
+            std::fs::write(&path, source).unwrap();
+            sources.push(path);
+        }
+        let output = std::process::Command::new("swiftc")
+            .arg("-emit-module")
+            .arg("-parse-as-library")
+            .arg("-module-name")
+            .arg("Combined")
+            .arg("-module-cache-path")
+            .arg(dir.path().join("cache"))
+            .arg("-o")
+            .arg(dir.path().join("Combined.swiftmodule"))
+            .args(&sources)
+            .output();
+        let Ok(output) = output else {
+            eprintln!("Swift is not installed; skipping multi-file compile probe");
+            return;
+        };
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for (module, source) in ["first_crate", "second_crate"].iter().zip(&sources) {
+            let output = std::process::Command::new("swiftc")
+                .arg("-emit-module")
+                .arg("-parse-as-library")
+                .arg("-module-name")
+                .arg(module)
+                .arg("-module-cache-path")
+                .arg(dir.path().join("cache"))
+                .arg("-o")
+                .arg(dir.path().join(format!("{module}.swiftmodule")))
+                .arg(source)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let client = dir.path().join("client.swift");
+        std::fs::write(&client, "import first_crate\nimport second_crate\n#if compiler(>=6.0)\nfunc report(_ first: FirstCrateErrors.BindingError, _ second: SecondCrateErrors.BindingError) {}\n#endif\n").unwrap();
+        let output = std::process::Command::new("swiftc")
+            .arg("-typecheck")
+            .arg("-I")
+            .arg(dir.path())
+            .arg("-module-cache-path")
+            .arg(dir.path().join("cache"))
+            .arg(&client)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

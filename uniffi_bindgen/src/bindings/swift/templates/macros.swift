@@ -4,10 +4,10 @@
 // passed to rust via `arg_list_lowered`
 #}
 
-{%- macro to_ffi_call(func) -%}
+{%- macro to_ffi_call(func, typed) -%}
     {%- call is_try(func) %}{% endcall -%}
     {%- if let(Some(e)) = func.throws_type() -%}
-        rustCallWithError({{ e|ffi_error_converter_name }}_lift) {
+        rustCallWithError({% if typed %}uniffiLibraryError({{ e|ffi_error_converter_name }}_lift){% else %}{{ e|ffi_error_converter_name }}_lift{% endif %}) {
     {%- else -%}
         rustCall() {
     {%- endif %}
@@ -47,24 +47,43 @@
 
 // eg, `public func foo_bar() { body }`
 {%- macro func_decl(func_decl, callable, indent) %}
+{%- call(typed) declaration_branches(callable) %}
+{%- call func_decl_impl(func_decl, callable, indent, typed) %}{% endcall %}
+{%- endcall %}
+{%- endmacro %}
+{%- macro func_decl_impl(func_decl, callable, indent, typed) %}
 {%- call docstring(callable, indent) %}{% endcall %}
 {{ func_decl }} {{ callable.name()|fn_name }}(
     {%- call arg_list_decl(callable) %}{% endcall -%})
     {%- call is_async(callable) %}{% endcall %}
-    {%- call throws(callable) %}{% endcall %}
+    {%- call declaration_throws(callable, typed) %}{% endcall %}
     {%- if let Some(return_type) = callable.return_type() %} -> {{ return_type|type_name }} {%- endif %}  {
-    {%- call call_body(callable) %}{% endcall %}
+    {%- if typed %}
+    return try {% if callable.is_async() %}await {% endif %}uniffiTypedCall({{ callable.throws_type().unwrap()|type_name }}.self) {
+    {%- endif %}
+    {%- call call_body(callable, typed) %}{% endcall %}
+    {%- if typed %}
+    }
+    {%- endif %}
 }
 {%- endmacro %}
 
 // primary ctor - no name, no return-type.
 {%- macro ctor_decl(callable, indent) %}
+{%- call(typed) declaration_branches(callable) %}
+{%- call ctor_decl_impl(callable, indent, typed) %}{% endcall %}
+{%- endcall %}
+{%- endmacro %}
+{%- macro ctor_decl_impl(callable, indent, typed) %}
 {%- call docstring(callable, indent) %}{% endcall %}
 public convenience init(
-    {%- call arg_list_decl(callable) %}{% endcall -%}) {%- call is_async(callable) %}{% endcall %} {%- call throws(callable) %}{% endcall %} {
+    {%- call arg_list_decl(callable) %}{% endcall -%}) {%- call is_async(callable) %}{% endcall %} {%- call declaration_throws(callable, typed) %}{% endcall %} {
+    {%- if typed %}
+    let handle = try {% if callable.is_async() %}await {% endif %}uniffiTypedCall({{ callable.throws_type().unwrap()|type_name }}.self) {
+    {%- endif %}
     {%- if callable.is_async() %}
     let handle =
-        {%- call call_async(callable) %}{% endcall %}
+        {%- call call_async(callable, typed) %}{% endcall %}
         {# The async mechanism returns an already constructed self.
            We work around that by cloning the handle from that object, then
            assume the old object dies as there are no other references possible.
@@ -72,27 +91,31 @@ public convenience init(
         .uniffiCloneHandle()
     {%- else %}
     let handle =
-        {% call to_ffi_call(callable) %}{% endcall %}
+        {% call to_ffi_call(callable, typed) %}{% endcall %}
+    {%- endif %}
+    {%- if typed %}
+    return handle
+    }
     {%- endif %}
     self.init(unsafeFromHandle: handle)
 }
 {%- endmacro %}
 
-{%- macro call_body(callable) %}
+{%- macro call_body(callable, typed) %}
 {%- if callable.is_async() %}
-    return {%- call call_async(callable) %}{% endcall %}
+    return {%- call call_async(callable, typed) %}{% endcall %}
 {%- else %}
 {%-     match callable.return_type() -%}
 {%-         when Some(return_type) %}
-    return {% call is_try(callable) %}{% endcall %} {{ return_type|lift_fn }}({% call to_ffi_call(callable) %}{% endcall %})
+    return {% call is_try(callable) %}{% endcall %} {{ return_type|lift_fn }}({% call to_ffi_call(callable, typed) %}{% endcall %})
 {%-         when None %}
-{%-             call to_ffi_call(callable) %}{% endcall %}
+{%-             call to_ffi_call(callable, typed) %}{% endcall %}
 {%-     endmatch %}
 {%- endif %}
 
 {%- endmacro %}
 
-{%- macro call_async(callable) %}
+{%- macro call_async(callable, typed) %}
         {% call is_try(callable) %}{% endcall %} await uniffiRustCallAsync(
             rustFutureFunc: {
                 {{ callable.ffi_func().name() }}(
@@ -119,7 +142,7 @@ public convenience init(
             {%- endmatch %}
             {%- match callable.throws_type() %}
             {%- when Some with (e) %}
-            errorHandler: {{ e|ffi_error_converter_name }}_lift
+            errorHandler: {% if typed %}uniffiLibraryError({{ e|ffi_error_converter_name }}_lift){% else %}{{ e|ffi_error_converter_name }}_lift{% endif %}
             {%- else %}
             errorHandler: nil
             {% endmatch %}
@@ -214,7 +237,7 @@ v{{- field_num -}}
 // The local Rust `Debug` implementation.
 public var debugDescription: String {
     return {% call is_try(fmt) %}{% endcall %} {{ fmt.return_type().unwrap()|lift_fn }}(
-        {% call to_ffi_call(fmt) %}{% endcall %}
+        {% call to_ffi_call(fmt, false) %}{% endcall %}
     )
 }
 {%- endif %}
@@ -222,7 +245,7 @@ public var debugDescription: String {
 // The local Rust `Display` implementation.
 public var description: String {
     return {% call is_try(fmt) %}{% endcall %} {{ fmt.return_type().unwrap()|lift_fn }}(
-        {% call to_ffi_call(fmt) %}{% endcall %}
+        {% call to_ffi_call(fmt, false) %}{% endcall %}
     )
 }
 {%- endif %}
@@ -230,7 +253,7 @@ public var description: String {
 // The local Rust `Eq` implementation - only `eq` is used.
 public static func == (self: {{ eq.object_name() | class_name }}, other: {{ eq.object_name() | class_name }}) -> Bool {
     return {% call is_try(eq) %}{% endcall %} {{ eq.return_type().unwrap()|lift_fn }}(
-        {% call to_ffi_call(eq) %}{% endcall %}
+        {% call to_ffi_call(eq, false) %}{% endcall %}
     )
 }
 {%- endif %}
@@ -238,7 +261,7 @@ public static func == (self: {{ eq.object_name() | class_name }}, other: {{ eq.o
 // The local Rust `Hash` implementation
 public func hash(into hasher: inout Hasher) {
     let val = {% call is_try(hash) %}{% endcall %} {{ hash.return_type().unwrap()|lift_fn }}(
-        {% call to_ffi_call(hash) %}{% endcall %}
+        {% call to_ffi_call(hash, false) %}{% endcall %}
     )
     hasher.combine(val)
 }
@@ -247,8 +270,54 @@ public func hash(into hasher: inout Hasher) {
 // The local Rust `Ord` implementation
 public static func < (self: {{ cmp.object_name() | class_name }}, other: {{ cmp.object_name() | class_name }}) -> Bool {
     return {% call is_try(cmp) %}{% endcall %} {{ cmp.return_type().unwrap()|lift_fn }}(
-        {% call to_ffi_call(cmp) %}{% endcall %}
+        {% call to_ffi_call(cmp, false) %}{% endcall %}
     ) < 0
 }
+{%- endif %}
+{%- endmacro %}
+
+{%- macro declaration_throws(func, typed) %}
+{%- if typed %}throws({{ config.call_error_name() }}<{{ func.throws_type().unwrap()|type_name }}>) {% else %}{% call throws(func) %}{% endcall %}{% endif %}
+{%- endmacro %}
+
+{%- macro runtime_error_decl(visibility, name) -%}
+// An error type for FFI errors. These errors occur at the UniFFI level, not
+// the library level.
+{{ visibility }} enum {{ name }}: LocalizedError {
+    case bufferOverflow
+    case incompleteData
+    case unexpectedOptionalTag
+    case unexpectedEnumCase
+    case unexpectedNullPointer
+    case unexpectedRustCallStatusCode
+    case unexpectedRustCallError
+    case unexpectedStaleHandle
+    case rustPanic(_ message: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .bufferOverflow: return "Reading the requested value would read past the end of the buffer"
+        case .incompleteData: return "The buffer still has data after lifting its containing value"
+        case .unexpectedOptionalTag: return "Unexpected optional tag; should be 0 or 1"
+        case .unexpectedEnumCase: return "Raw enum value doesn't match any cases"
+        case .unexpectedNullPointer: return "Raw pointer value was null"
+        case .unexpectedRustCallStatusCode: return "Unexpected RustCallStatus code"
+        case .unexpectedRustCallError: return "CALL_ERROR but no errorClass specified"
+        case .unexpectedStaleHandle: return "The object in the handle map has been dropped already"
+        case let .rustPanic(message): return message
+        }
+    }
+}
+{%- endmacro %}
+
+{%- macro declaration_branches(callable) %}
+{%- if config.experimental_typed_throws() && callable.throws() %}
+#if compiler(>=6.0)
+{{- caller(true) }}
+#else
+{{- caller(false) }}
+#endif
+{%- else %}
+{{- caller(false) }}
 {%- endif %}
 {%- endmacro %}

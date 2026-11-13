@@ -61,6 +61,7 @@ pub fn run_script(
     let mut command = create_command("swift", options);
     command
         .current_dir(&out_dir)
+        .env("UNIFFI_TEST_SWIFTC", swift_compiler())
         .arg("-I")
         .arg(&out_dir)
         .arg("-L")
@@ -188,8 +189,25 @@ impl GeneratedSources {
     }
 }
 
+fn swift_compiler() -> std::path::PathBuf {
+    if let Some(compiler) = std::env::var_os("UNIFFI_TEST_SWIFTC") {
+        return compiler.into();
+    }
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|path| path.join("swiftc"))
+        .find(|path| path.is_file())
+        .and_then(|path| std::fs::canonicalize(path).ok())
+        .unwrap_or_else(|| "swiftc".into())
+}
+
 fn create_command(program: &str, options: &RunScriptOptions) -> Command {
-    let mut command = Command::new(program);
+    let compiler = swift_compiler();
+    let executable = match program {
+        "swiftc" => compiler,
+        "swift" => compiler.with_file_name("swift"),
+        _ => program.into(),
+    };
+    let mut command = Command::new(executable);
     if !options.show_compiler_messages {
         // This prevents most compiler messages, but not remarks
         command.arg("-suppress-warnings");

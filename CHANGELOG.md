@@ -16,6 +16,7 @@
   It now controls multiple features that require Java 9 (minSdk 28 on Android)
 
 ### What's New?
+- Swift: added explicit opt-in `experimental_typed_throws`, with two-level recoverable errors on Swift 6 compilers and legacy declarations on older compilers.
 - Added `uniffi_parse_rs`, which generates metadata by parsing Rust sources directly.
   This allows using the macros syntax to describe your interface, without requiring you to build the
   library before generating bindings.

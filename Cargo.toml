@@ -39,6 +39,7 @@ members = [
   "bindgen-tests/python",
   "bindgen-tests/ruby",
   "bindgen-tests/swift",
+  "bindgen-tests/swift/typed-throws",
   "bindgen-tests/swift/keywords",
   "bindgen-tests/swift/callbacks-omit-labels",
   "bindgen-tests/swift/codable",
