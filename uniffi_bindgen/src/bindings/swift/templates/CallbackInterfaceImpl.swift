@@ -56,7 +56,7 @@ fileprivate struct {{ trait_impl }} {
                 {%- if config.experimental_typed_throws() && meth.throws() %}
                 } catch {
 #if compiler(>=6.0)
-                    if let wrapped = error as? {{ config.typed_error_name(ci, "UniffiCallError") }}<{{ meth.throws_type().unwrap()|type_name }}> {
+                    if let wrapped = error as? {{ config.call_error_name(ci) }}<{{ meth.throws_type().unwrap()|type_name }}> {
                         switch wrapped {
                         case .library(let failure): throw failure
                         case .binding(let failure): throw failure

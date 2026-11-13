@@ -289,5 +289,5 @@ public static func < (self: {{ cmp.object_name() | class_name }}, other: {{ cmp.
 {%- endmacro %}
 
 {%- macro declaration_throws(func, typed) %}
-{%- if typed %}throws({{ config.typed_error_name(ci, "UniffiCallError") }}<{{ func.throws_type().unwrap()|type_name }}>) {% else %}{% call throws(func) %}{% endcall %}{% endif %}
+{%- if typed %}throws({{ config.call_error_name(ci) }}<{{ func.throws_type().unwrap()|type_name }}>) {% else %}{% call throws(func) %}{% endcall %}{% endif %}
 {%- endmacro %}

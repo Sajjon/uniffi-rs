@@ -221,10 +221,15 @@ impl CustomTypeConfig {
     }
 }
 
+const CALL_ERROR_NAME: &str = "UniffiCallError";
+const BINDING_ERROR_NAME: &str = "UniffiBindingError";
+const RUNTIME_ERROR_NAME: &str = "UniffiRuntimeError";
+const DECODED_LIBRARY_ERROR_NAME: &str = "UniffiDecodedLibraryError";
+
 impl Config {
     // Use the normal Swift type oracle, including configured renames already
     // applied to the interface, when reserving support type names.
-    pub fn typed_error_name(&self, ci: &ComponentInterface, base: &str) -> String {
+    fn typed_error_name(&self, ci: &ComponentInterface, base: &str) -> String {
         let names: HashSet<_> = ci
             .iter_local_types()
             .chain(ci.iter_external_types())
@@ -235,6 +240,22 @@ impl Config {
             name.push('_');
         }
         name
+    }
+
+    pub fn call_error_name(&self, ci: &ComponentInterface) -> String {
+        self.typed_error_name(ci, CALL_ERROR_NAME)
+    }
+
+    pub fn binding_error_name(&self, ci: &ComponentInterface) -> String {
+        self.typed_error_name(ci, BINDING_ERROR_NAME)
+    }
+
+    pub fn runtime_error_name(&self, ci: &ComponentInterface) -> String {
+        self.typed_error_name(ci, RUNTIME_ERROR_NAME)
+    }
+
+    pub fn decoded_library_error_name(&self, ci: &ComponentInterface) -> String {
+        self.typed_error_name(ci, DECODED_LIBRARY_ERROR_NAME)
     }
 
     pub fn experimental_typed_throws(&self) -> bool {
