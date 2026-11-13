@@ -1,14 +1,4 @@
-{%- if config.experimental_typed_throws() %}
-#if compiler(>=6.0)
-{% call swift::runtime_error_decl("public", config.runtime_error_name(ci)) %}{% endcall %}
-fileprivate typealias UniffiInternalError = {{ config.runtime_error_name(ci) }}
-#else
-{% call swift::runtime_error_decl("fileprivate", "UniffiInternalError") %}{% endcall %}
-#endif
-{%- else %}
-{%- call swift::runtime_error_decl("fileprivate", "UniffiInternalError") %}{% endcall %}
-{%- endif %}
-
+{%- include "RuntimeErrors.swift" %}
 fileprivate extension NSLock {
     func withLock<T>(f: () throws -> T) rethrows -> T {
         self.lock()
@@ -122,60 +112,4 @@ private func uniffiTraitInterfaceCallWithError<T, E>(
     }
 }
 
-{%- if config.experimental_typed_throws() %}
-#if compiler(>=6.0)
-/// A declared Rust failure or a failure encountered crossing the binding.
-public enum {{ config.call_error_name(ci) }}<Failure: Swift.Error>: Swift.Error {
-    case library(Failure)
-    case binding({{ config.binding_error_name(ci) }})
-}
-
-/// Binding failures retain the original Swift error when it is not recognized.
-public enum {{ config.binding_error_name(ci) }}: Swift.Error {
-    case runtime({{ config.runtime_error_name(ci) }})
-    case unexpected(any Swift.Error)
-}
-
-fileprivate struct {{ config.decoded_library_error_name(ci) }}<Failure: Swift.Error>: Swift.Error {
-    let failure: Failure
-}
-
-private func uniffiLibraryError<E: Swift.Error>(
-    _ lift: @escaping (RustBuffer) throws -> E
-) -> (RustBuffer) throws -> {{ config.decoded_library_error_name(ci) }}<E> {
-    { {{ config.decoded_library_error_name(ci) }}(failure: try lift($0)) }
-}
-
-private func uniffiBindingError(_ error: any Swift.Error) -> {{ config.binding_error_name(ci) }} {
-    guard let internalError = error as? UniffiInternalError else {
-        return .unexpected(error)
-    }
-    return .runtime(internalError)
-}
-
-private func uniffiTypedCall<T, E: Swift.Error>(
-    _ failure: E.Type, _ body: () throws -> T
-) throws({{ config.call_error_name(ci) }}<E>) -> T {
-    do { return try body() }
-    catch let decoded as {{ config.decoded_library_error_name(ci) }}<E> { throw .library(decoded.failure) }
-    catch { throw .binding(uniffiBindingError(error)) }
-}
-
-private func uniffiTypedCall<T, E: Swift.Error>(
-    _ failure: E.Type, _ body: () async throws -> T
-) async throws({{ config.call_error_name(ci) }}<E>) -> T {
-    do { return try await body() }
-    catch let decoded as {{ config.decoded_library_error_name(ci) }}<E> { throw .library(decoded.failure) }
-    catch { throw .binding(uniffiBindingError(error)) }
-}
-private func uniffiCallbackLift<T>(_ body: () throws -> T) throws -> T {
-    do { return try body() }
-    catch { throw uniffiBindingError(error) }
-}
-#else
-private func uniffiCallbackLift<T>(_ body: () throws -> T) throws -> T { try body() }
-private func uniffiLibraryError<E: Swift.Error>(
-    _ lift: @escaping (RustBuffer) throws -> E
-) -> (RustBuffer) throws -> E { lift }
-#endif
-{%- endif %}
+{%- include "TypedThrows.swift" %}

@@ -50,13 +50,13 @@ fileprivate struct {{ trait_impl }} {
                 {%- endif %}
                 return {% if meth.throws() %}try {% endif %}{% if meth.is_async() %}await {% endif %}uniffiObj.{{ meth.name()|fn_name }}(
                     {%- for arg in meth.arguments() %}
-                    {% if !config.omit_argument_labels() %} {{ arg.name()|arg_name }}: {% endif %}{% if config.experimental_typed_throws() %}try uniffiCallbackLift { try {{ arg|lift_fn }}({{ arg.name()|var_name }}) }{% else %}try {{ arg|lift_fn }}({{ arg.name()|var_name }}){% endif %}{% if !loop.last %},{% endif %}
+                    {% if !config.omit_argument_labels() %} {{ arg.name()|arg_name }}: {% endif %}{% if config.experimental_typed_throws() && meth.throws() %}try uniffiCallbackLift { try {{ arg|lift_fn }}({{ arg.name()|var_name }}) }{% else %}try {{ arg|lift_fn }}({{ arg.name()|var_name }}){% endif %}{% if !loop.last %},{% endif %}
                     {%- endfor %}
                 )
                 {%- if config.experimental_typed_throws() && meth.throws() %}
                 } catch {
 #if compiler(>=6.0)
-                    if let wrapped = error as? {{ config.call_error_name(ci) }}<{{ meth.throws_type().unwrap()|type_name }}> {
+                    if let wrapped = error as? {{ config.call_error_name() }}<{{ meth.throws_type().unwrap()|type_name }}> {
                         switch wrapped {
                         case .library(let failure): throw failure
                         case .binding(let failure): throw failure
