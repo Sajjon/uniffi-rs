@@ -97,18 +97,64 @@ module-qualified wrapper, with a final name chosen to avoid user-type collisions
 // Illustrative API, not an implemented declaration.
 public enum UniffiCallError<Failure: Swift.Error>: Swift.Error {
     case library(Failure)
+    case uniffi(UniffiRuntimeError)
     case unexpected(any Swift.Error)
 }
 // Rust Result<Value, MyError>:
 public func operation() throws(UniffiCallError<MyError>) -> Value
 ```
 
-Classify failures where they originate: a successfully decoded Rust `CALL_ERROR`
-becomes `.library`; decoding failures, caught Rust panics, and return-lifting
-failures become `.unexpected`. Preserve the original unexpected error, including
-its diagnostics. Do not classify every error matching `MyError` as a Rust domain
-failure: a custom conversion could throw the same Swift type. Keep this wrapper
-entirely on the Swift side; never serialize it as the Rust error enum.
+The three cases distinguish the declared library error, recognized UniFFI runtime
+failures, and other propagated Swift errors. `Failure` is the library's declared
+Rust error type; it does not mean every error written by application developers.
+For example, a user-supplied Swift custom conversion can throw a validation error
+without that error being part of the Rust `Result` contract.
+
+| Origin | Classification |
+| --- | --- |
+| Successfully decoded Rust `CALL_ERROR` | `.library(decodedError)` |
+| UniFFI buffer overflow, incomplete data, invalid tag/handle/status | `.uniffi(...)` |
+| Rust panic reported through `CALL_UNEXPECTED_ERROR` | `.uniffi(...)`, preserving the available message |
+| Custom Swift lift expression throws its own validation or SDK error | `.unexpected(originalError)` |
+| External converter throws an error this module cannot recognize | `.unexpected(originalError)` |
+
+`unexpected` means outside the declared library error and the recognized UniFFI
+runtime errors, not an unknowable error. A configured lift expression such as
+`try ValidatedValue(raw: {})` runs inside an untyped throwing converter and can
+throw an arbitrary Swift error. The caller can still inspect or downcast the
+stored error. Keep the actual error value and diagnostics, not just a string.
+This escape hatch is needed by existing extension points, not merely hypothetical
+future failures. No catchable error wrapper can capture `fatalError`, process
+abort, or memory corruption; this feature does not promise to do so.
+
+Classify failures where they originate: decode a Rust `CALL_ERROR` first, mapping
+any decoding failure to `.uniffi` or `.unexpected`, then wrap the decoded value
+as `.library`. Do not classify every error matching `Failure` as a Rust domain
+failure: a custom conversion could throw the same Swift type. Successful result
+lifting has the same UniFFI-versus-other distinction. Keep this wrapper entirely
+on the Swift side; never serialize it as the Rust error enum.
+
+The existing `UniffiInternalError` is `fileprivate`, so it cannot simply be used
+as an associated value in this public API. Introduce an opt-in public
+`UniffiRuntimeError` representation with explicit cases corresponding to the
+current internal failures, and a deliberate mapping at the typed boundary.
+Preserve available diagnostics and document that a reported Rust panic is not
+necessarily a UniFFI bug. Keep default output and internal converter signatures
+unchanged. Public case names and their evolution policy require review; do not
+mark this enum `@frozen` merely to enable exhaustive client switches.
+
+Generated modules have distinct error types. Plan explicit mappings for external
+modules where their public runtime errors are available. An older or opted-out
+module's private internal error cannot be reliably identified by another module;
+preserve it as `.unexpected` rather than guessing from its description. Test this
+mixed-configuration limitation and document it.
+
+Prefer these three direct cases to nesting `knownUniffiFailure` and `unknown`
+inside another enum. That nesting adds handling steps without additional
+information, and would misleadingly label custom-conversion errors as UniFFI
+failures. A two-case model remains possible if consumers need only domain versus
+everything else, but it gives up a useful typed distinction already supported by
+the current runtime.
 
 This provides a concrete thrown type but differs from the original request for
 exactly `throws(MyError)`. It also changes catch patterns for users who opt in.
@@ -131,7 +177,8 @@ remain nonthrowing with their existing behavior. Existing cancellation handling
 ## Implementation sequence
 
 1. **Capture the baseline and settle the API.** Generate representative fixtures
-   before changing templates. Confirm wrapper naming, domain/unexpected mapping,
+   before changing templates. Confirm wrapper naming, the three-way error mapping,
+   public runtime-error cases and their evolution policy,
    callback semantics, supported compiler baseline, and the config name. Record
    these decisions in the implementation PR.
 2. **Add configuration and rendering tests.** Cover omitted, false, true, and
@@ -152,10 +199,14 @@ remain nonthrowing with their existing behavior. Existing cancellation handling
    `ObjectTemplate.swift`, `CallbackInterfaceTemplate.swift`, and
    `CallbackInterfaceImpl.swift`. Rust-facing objects and Swift implementations of
    the same generated protocol must satisfy identical signatures. Under the
-   wrapper design, unwrap `.library` to `CALL_ERROR` and map `.unexpected` to
-   `CALL_UNEXPECTED_ERROR` on the callback boundary, preserving current transport
-   behavior. Argument-lifting errors remain unexpected. Cover sync and async
-   callbacks, foreign-implementable traits, and mocks; document the migration for
+   wrapper design, unwrap `.library` to `CALL_ERROR` and map both `.uniffi` and
+   `.unexpected` to `CALL_UNEXPECTED_ERROR` on the callback boundary, preserving current transport
+   behavior. Argument-lifting errors remain transport-level unexpected failures;
+   their local Swift classification can be `.uniffi` or `.unexpected`. The existing
+   unexpected-error wire format carries a diagnostic string, so arbitrary Swift
+   error identity and the three-way classification do not survive a Rust round
+   trip. Do not claim otherwise or change the ABI in this feature. Cover sync and
+   async callbacks, foreign-implementable traits, and mocks; document the migration for
    opted-in Swift implementations. Do not alter low-level converter `throws`
    signatures unnecessarily.
 6. **Document and validate.** Update `docs/manual/src/swift/configuration.md`, add
@@ -193,6 +244,11 @@ compatibility with Swift 5 compilers.
   a caught Rust panic, and a throwing custom lift. Inject malformed status/buffer
   cases at a Swift helper seam where necessary. Verify values, classification,
   and cleanup; no new crash should replace a currently catchable error.
+- Specifically assert `.library` for decoded domain errors, `.uniffi` for each
+  recognized internal failure, and `.unexpected` for a custom conversion's error.
+  Include a custom converter throwing the same type as `Failure` to prove it does
+  not become `.library`. Verify unexpected error payload preservation and the
+  documented fallback for private errors from external modules.
 - Cover constructors, sync/async methods and functions, callbacks and traits,
   object/external errors, and mixed-config modules. Check asynchronous resource
   release and callback completion exactly once on success and failure.
